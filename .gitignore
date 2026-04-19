@@ -1,0 +1,9 @@
+﻿.idea
+build
+vcpkg
+vcpkg_installed
+.vs
+!.vs/launch.vs.json
+*.spv
+vc140.pdb
+*.dxbc
