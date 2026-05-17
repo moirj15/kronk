@@ -18,6 +18,9 @@ add_executable(rts
 	src/utils.cpp
 	src/MessageQueue.cpp
     src/MessageQueue.hpp
+    src/GfxDriver.hpp
+	src/GfxDriver.cpp
+
 )
 
 include(cmake/CompilerWarnings.cmake)
