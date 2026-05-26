@@ -2,18 +2,18 @@
 
 #include "utils.hpp"
 
-#include <atomic>
-#include <condition_variable>
 #include <deque>
 #include <glm/glm.hpp>
-#include <mutex>
+#include <variant>
 
 namespace kronk
 {
 enum class MessageType : u32
 {
+  Invalid,
   ClearScreen,
   SubmitUnit,
+  LoadAsset,
 };
 
 struct ClearScreen
@@ -29,12 +29,19 @@ struct SubmitUnit
   glm::vec2   position{};
 };
 
-union Message
+enum class Asset : u32
 {
-  MessageType type;
-  ClearScreen clearScreen;
-  SubmitUnit  submitUnit;
+  GroundsKeeper,
+  Goose,
 };
+
+struct LoadAsset
+{
+  MessageType type{MessageType::LoadAsset};
+  Asset       asset{};
+};
+
+using Message = std::variant<ClearScreen, SubmitUnit, LoadAsset>;
 
 class MessageQueue final
 {

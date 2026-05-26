@@ -20,6 +20,10 @@ add_executable(rts
     src/MessageQueue.hpp
     src/GfxDriver.hpp
 	src/GfxDriver.cpp
+		src/GfxMain.cpp
+		src/GfxMain.hpp
+		src/ModuleIO.hpp
+		src/CppHelpers.hpp
 
 )
 

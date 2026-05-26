@@ -1,31 +1,33 @@
+#include "GfxMain.hpp"
 #include "MessageQueue.hpp"
+#include "ModuleIO.hpp"
 #include "utils.hpp"
 
 #include <SDL3/SDL.h>
-#include <condition_variable>
 #include <glbinding/gl/gl.h>
 #include <glbinding/glbinding.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <mutex>
 #include <print>
-#include <thread>
 
 constexpr u32 WIDTH  = 1920;
 constexpr u32 HEIGHT = 1080;
 
 using namespace gl;
 
+namespace kronk
+{
+
 GLuint CompileShaders(const GLchar **vertexShaderSource, const GLchar **fragmentShaderSource)
 {
   // Compile vertex shader
   GLuint vertexShader(glCreateShader(GL_VERTEX_SHADER));
-  glShaderSource(vertexShader, 1, vertexShaderSource, NULL);
+  glShaderSource(vertexShader, 1, vertexShaderSource, nullptr);
   glCompileShader(vertexShader);
 
   // Compile fragment shader
   GLuint fragmentShader(glCreateShader(GL_FRAGMENT_SHADER));
-  glShaderSource(fragmentShader, 1, fragmentShaderSource, NULL);
+  glShaderSource(fragmentShader, 1, fragmentShaderSource, nullptr);
   glCompileShader(fragmentShader);
 
   // Link vertex and fragment shader together
@@ -41,43 +43,13 @@ GLuint CompileShaders(const GLchar **vertexShaderSource, const GLchar **fragment
   return program;
 }
 
-struct GameThreadData
-{
-};
-
-struct GameThreadOutput
-{
-  kronk::MessageQueue gameToRenderQueue{};
-};
-
-struct RenderThreadData
-{
-  SDL_Window *window;
-};
-
 void GameThreadMain(GameThreadData &in, GameThreadOutput &out)
 {
   bool running = true;
-  out.gameToRenderQueue.SendMessage({.clearScreen = {.color = {1, 0, 1, 1}}});
+  out.gameToRenderQueue.SendMessage(ClearScreen{.color = {1, 0, 1, 1}});
 }
 
-void RenderThreadMain(const RenderThreadData &data, GameThreadOutput &in)
-{
-  in.gameToRenderQueue.BlockUntilMessages();
-  const kronk::Message m = in.gameToRenderQueue.GetMessage();
-  if (m.type == kronk::MessageType::ClearScreen)
-  {
-    glClearColor(
-      m.clearScreen.color.r,
-      m.clearScreen.color.g,
-      m.clearScreen.color.b,
-      m.clearScreen.color.a);
-    glClear(GL_COLOR_BUFFER_BIT);
-  }
-
-  SDL_GL_SwapWindow(data.window);
-}
-
+} // namespace kronk
 int main(int argc, char **argv)
 {
   if (!SDL_Init(SDL_INIT_VIDEO))
@@ -97,11 +69,10 @@ int main(int argc, char **argv)
   SDL_GL_SetSwapInterval(1); // VSync
 
   glbinding::initialize(
-    reinterpret_cast<glbinding::ProcAddress (*)(const char *)>(
-      SDL_GL_GetProcAddress)); // only resolve functions that are actually used (lazy)
+    SDL_GL_GetProcAddress); // only resolve functions that are actually used (lazy)
 
   glClearColor(1.0, 1.0, 0.0, 1.0);
-  glClear(gl::GL_COLOR_BUFFER_BIT);
+  glClear(GL_COLOR_BUFFER_BIT);
   SDL_GL_SwapWindow(window);
 
   kronk::MessageQueue gameToRenderQueue{};
@@ -112,32 +83,15 @@ int main(int argc, char **argv)
   auto vP   = vSrc.data();
   auto fP   = fSrc.data();
 
-  GLuint shader = CompileShaders((const GLchar **)&vP, (const GLchar **)&fP);
+  GLuint shader = kronk::CompileShaders((const GLchar **)&vP, (const GLchar **)&fP);
 
-  bool      running = true;
-  SDL_Event e{};
-  // std::mutex              begin_frame_mutex{};
-  // std::condition_variable begin_frame{};
-  //
-  // std::jthread gameThread{
-  //   [&gameToRenderQueue /*, &renderToGameQueue*/, &begin_frame, &begin_frame_mutex]() {
-  //     bool running = true;
-  //     while (running)
-  //     {
-  //       {
-  //         std::unique_lock lock{begin_frame_mutex};
-  //         begin_frame.wait(lock);
-  //       }
-  //       gameToRenderQueue.SendMessage({.clearScreen = {.color = {1, 0, 1, 1}}});
-  //
-  //       // begin_frame.notify_one();
-  //       std::this_thread::sleep_for(std::chrono::milliseconds(16));
-  //     }
-  //   }};
+  bool                    running = true;
+  SDL_Event               e{};
+  kronk::GameThreadData   gameThreadData{};
+  kronk::GameThreadOutput gameThreadOutput{};
+  kronk::RenderThreadData renderThreadData{.window = window};
 
-  GameThreadData   gameThreadData{};
-  GameThreadOutput gameThreadOutput{};
-  RenderThreadData renderThreadData{.window = window};
+  gameThreadOutput.gameToRenderQueue.SendMessage(kronk::LoadAsset{.asset = kronk::Asset::Goose});
 
   while (running)
   {
@@ -151,7 +105,7 @@ int main(int argc, char **argv)
     SDL_PumpEvents();
 
     GameThreadMain(gameThreadData, gameThreadOutput);
-    RenderThreadMain(renderThreadData, gameThreadOutput);
+    kronk::RenderThreadMain(renderThreadData, gameThreadOutput);
   }
   SDL_DestroyWindow(window);
   SDL_Quit();
