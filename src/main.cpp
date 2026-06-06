@@ -18,35 +18,12 @@ using namespace gl;
 namespace kronk
 {
 
-GLuint CompileShaders(const GLchar **vertexShaderSource, const GLchar **fragmentShaderSource)
-{
-  // Compile vertex shader
-  GLuint vertexShader(glCreateShader(GL_VERTEX_SHADER));
-  glShaderSource(vertexShader, 1, vertexShaderSource, nullptr);
-  glCompileShader(vertexShader);
-
-  // Compile fragment shader
-  GLuint fragmentShader(glCreateShader(GL_FRAGMENT_SHADER));
-  glShaderSource(fragmentShader, 1, fragmentShaderSource, nullptr);
-  glCompileShader(fragmentShader);
-
-  // Link vertex and fragment shader together
-  GLuint program(glCreateProgram());
-  glAttachShader(program, vertexShader);
-  glAttachShader(program, fragmentShader);
-  glLinkProgram(program);
-
-  // Delete shaders objects
-  glDeleteShader(vertexShader);
-  glDeleteShader(fragmentShader);
-
-  return program;
-}
-
 void GameThreadMain(GameThreadData &in, GameThreadOutput &out)
 {
   bool running = true;
   out.gameToRenderQueue.SendMessage(ClearScreen{.color = {1, 0, 1, 1}});
+  out.gameToRenderQueue.SendMessage(Draw{});
+  out.gameToRenderQueue.SendMessage(EndFrame{});
 }
 
 } // namespace kronk
@@ -61,7 +38,9 @@ int main(int argc, char **argv)
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+  SDL_GL_SetAttribute(
+    SDL_GL_CONTEXT_FLAGS,
+    SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | SDL_GL_CONTEXT_DEBUG_FLAG);
   SDL_Window *window = SDL_CreateWindow("SDL3 GL", 800, 600, SDL_WINDOW_OPENGL);
 
   SDL_GLContext glContext = SDL_GL_CreateContext(window);
@@ -78,18 +57,12 @@ int main(int argc, char **argv)
   kronk::MessageQueue gameToRenderQueue{};
   // kronk::MessageQueue renderToGameQueue{};
 
-  auto vSrc = io::ReadFile("shaders/2dRect.vert");
-  auto fSrc = io::ReadFile("shaders/2dRect.frag");
-  auto vP   = vSrc.data();
-  auto fP   = fSrc.data();
-
-  GLuint shader = kronk::CompileShaders((const GLchar **)&vP, (const GLchar **)&fP);
-
   bool                    running = true;
   SDL_Event               e{};
   kronk::GameThreadData   gameThreadData{};
   kronk::GameThreadOutput gameThreadOutput{};
   kronk::RenderThreadData renderThreadData{.window = window};
+  kronk::RenderInit();
 
   gameThreadOutput.gameToRenderQueue.SendMessage(kronk::LoadAsset{.asset = kronk::Asset::Goose});
 

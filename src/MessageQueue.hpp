@@ -33,6 +33,7 @@ enum class Asset : u32
 {
   GroundsKeeper,
   Goose,
+  Plane,
 };
 
 struct LoadAsset
@@ -41,7 +42,15 @@ struct LoadAsset
   Asset       asset{};
 };
 
-using Message = std::variant<ClearScreen, SubmitUnit, LoadAsset>;
+struct Draw
+{
+};
+
+struct EndFrame
+{
+};
+
+using Message = std::variant<ClearScreen, SubmitUnit, LoadAsset, Draw, EndFrame>;
 
 class MessageQueue final
 {
