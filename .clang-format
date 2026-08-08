@@ -1,5 +1,5 @@
 ﻿---
-AccessModifierOffset: -2
+AccessModifierOffset: -3
 AlignAfterOpenBracket: AlwaysBreak
 AlignConsecutiveMacros: 'true'
 AlignConsecutiveAssignments: true
@@ -25,7 +25,7 @@ BinPackParameters: 'false'
 BreakBeforeBinaryOperators: NonAssignment
 BraceWrapping:
   AfterClass: true
-  AfterControlStatement: true 
+  AfterControlStatement: true
   AfterEnum: true
   AfterFunction: true
   AfterNamespace: true
@@ -33,7 +33,7 @@ BraceWrapping:
   AfterStruct: true
   AfterUnion: true
   BeforeCatch: false
-  BeforeElse: true 
+  BeforeElse: true
   IndentBraces: false
 BreakBeforeBraces: Custom
 BreakConstructorInitializers: AfterColon
@@ -43,8 +43,8 @@ ColumnLimit: '100'
 CompactNamespaces: 'true'
 QualifierAlignment: Left
 ConstructorInitializerAllOnOneLineOrOnePerLine: 'true'
-ConstructorInitializerIndentWidth: '4'
-ContinuationIndentWidth: '2'
+ConstructorInitializerIndentWidth: '6'
+ContinuationIndentWidth: '3'
 Cpp11BracedListStyle: 'true'
 DerivePointerAlignment: 'false'
 DisableFormat: 'false'
@@ -53,7 +53,7 @@ FixNamespaceComments: 'true'
 IncludeBlocks: Regroup
 IndentCaseLabels: 'false'
 IndentPPDirectives: None
-IndentWidth: '2'
+IndentWidth: '3'
 Language: Cpp
 MaxEmptyLinesToKeep: '1'
 NamespaceIndentation: None
