@@ -1,30 +1,21 @@
-#include "GfxMain.hpp"
-#include "MessageQueue.hpp"
-#include "ModuleIO.hpp"
 #include "utils.hpp"
 
 #include <SDL3/SDL.h>
-#include <glbinding/gl/gl.h>
-#include <glbinding/glbinding.h>
+#include <SDL3/SDL_vulkan.h>
+#include <VkBootstrap.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <print>
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.h>
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
 
 constexpr u32 WIDTH  = 1920;
 constexpr u32 HEIGHT = 1080;
 
-using namespace gl;
-
 namespace kronk
 {
-
-void GameThreadMain(GameThreadData &in, GameThreadOutput &out)
-{
-  bool running = true;
-  out.gameToRenderQueue.SendMessage(ClearScreen{.color = {1, 0, 1, 1}});
-  out.gameToRenderQueue.SendMessage(Draw{});
-  out.gameToRenderQueue.SendMessage(EndFrame{});
-}
 
 } // namespace kronk
 int main(int argc, char **argv)
@@ -34,38 +25,66 @@ int main(int argc, char **argv)
     std::println("err: {}", SDL_GetError());
     assert(0);
   }
+  SDL_Window *window = SDL_CreateWindow("SDL3 GL", 800, 600, SDL_WINDOW_VULKAN);
+  // if (!SDL_Vulkan_LoadLibrary(nullptr))
+  // {
+  //   std::println("err: {}", SDL_GetError());
+  //   assert(0);
+  // }
 
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-  SDL_GL_SetAttribute(
-    SDL_GL_CONTEXT_FLAGS,
-    SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | SDL_GL_CONTEXT_DEBUG_FLAG);
-  SDL_Window *window = SDL_CreateWindow("SDL3 GL", 800, 600, SDL_WINDOW_OPENGL);
+  u32                sdlExtensionCount = 0;
+  const char *const *extensions        = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
 
-  SDL_GLContext glContext = SDL_GL_CreateContext(window);
-  assert(glContext);
-  SDL_GL_SetSwapInterval(1); // VSync
+  vkb::InstanceBuilder builder;
 
-  glbinding::initialize(
-    SDL_GL_GetProcAddress); // only resolve functions that are actually used (lazy)
+  auto result = builder.set_app_name("Example vulkan_application")
+                  .request_validation_layers(true)
+                  .use_default_debug_messenger()
+                  .require_api_version(1, 3, 0)
+                  .build();
+  vkb::Instance            vkbInstance    = result.value();
+  VkInstance               instance       = vkbInstance.instance;
+  VkDebugUtilsMessengerEXT debugMessenger = vkbInstance.debug_messenger;
 
-  glClearColor(1.0, 1.0, 0.0, 1.0);
-  glClear(GL_COLOR_BUFFER_BIT);
-  SDL_GL_SwapWindow(window);
+  VkSurfaceKHR surface{};
+  SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface);
 
-  kronk::MessageQueue gameToRenderQueue{};
-  // kronk::MessageQueue renderToGameQueue{};
+  VkPhysicalDeviceVulkan13Features features{
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+  features.dynamicRendering = true;
+  features.synchronization2 = true;
 
-  bool                    running = true;
-  SDL_Event               e{};
-  kronk::GameThreadData   gameThreadData{};
-  kronk::GameThreadOutput gameThreadOutput{};
-  kronk::RenderThreadData renderThreadData{.window = window};
-  kronk::RenderInit();
+  VkPhysicalDeviceVulkan12Features features12{
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+  features12.bufferDeviceAddress = true;
+  features12.descriptorIndexing  = true;
 
-  gameThreadOutput.gameToRenderQueue.SendMessage(kronk::LoadAsset{.asset = kronk::Asset::Goose});
+  VkPhysicalDeviceVulkan11Features features11{
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+  features11.variablePointers              = true;
+  features11.variablePointersStorageBuffer = true;
 
+  vkb::PhysicalDeviceSelector selector{vkbInstance};
+
+  vkb::PhysicalDevice physicalDevice = selector.set_minimum_version(1, 3)
+                                         .set_required_features_13(features)
+                                         .set_required_features_12(features12)
+                                         .set_required_features_11(features11)
+                                         .set_surface(surface)
+                                         .select()
+                                         .value();
+
+  vkb::DeviceBuilder deviceBuilder{physicalDevice};
+  vkb::Device        vkbDevice = deviceBuilder.build().value();
+
+  VkDevice         device    = vkbDevice.device;
+  VkPhysicalDevice chosenGPU = physicalDevice.physical_device;
+
+  VkQueue graphicsQueue       = vkbDevice.get_queue(vkb::QueueType::graphics).value();
+  u32     graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+
+  bool      running = true;
+  SDL_Event e;
   while (running)
   {
     while (SDL_PollEvent(&e))
@@ -76,9 +95,6 @@ int main(int argc, char **argv)
       }
     }
     SDL_PumpEvents();
-
-    GameThreadMain(gameThreadData, gameThreadOutput);
-    kronk::RenderThreadMain(renderThreadData, gameThreadOutput);
   }
   SDL_DestroyWindow(window);
   SDL_Quit();
