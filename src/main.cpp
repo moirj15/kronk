@@ -12,24 +12,48 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
-constexpr u32 WIDTH  = 800;
-constexpr u32 HEIGHT = 600;
+constexpr u32 WIDTH                = 800;
+constexpr u32 HEIGHT               = 600;
+constexpr u32 MAX_FRAMES_IN_FLIGHT = 2;
 
 namespace kronk
 {
+struct ShaderData
+{
+   glm::mat4 projection;
+   glm::mat4 view;
+   glm::mat4 model[3];
+   glm::vec4 lightPos{0.0f, -10.0f, 10.0f, 0.0f};
+   uint32_t  selected{1};
+};
+
+struct ShaderDataBuffer
+{
+   VkBuffer          buffer{};
+   VmaAllocation     allocation{};
+   VmaAllocationInfo allocationInfo{};
+   VkDeviceAddress   deviceAddress{};
+};
 
 struct VkContext
 {
-   VkDevice                 device{};
-   VkPhysicalDevice         chosenGPU{};
-   VkQueue                  graphicsQueue{};
-   u32                      graphicsQueueFamily{};
-   VmaAllocator             allocator{};
-   VkSurfaceKHR             surface{};
-   VkSurfaceCapabilitiesKHR surfaceCaps{};
-   VkSwapchainKHR           swapchain{};
-   std::vector<VkImage>     swapchainImages{};
-   std::vector<VkImageView> swapchainViews{};
+   VkDevice                                           device{};
+   VkPhysicalDevice                                   chosenGPU{};
+   VkQueue                                            graphicsQueue{};
+   u32                                                graphicsQueueFamily{};
+   VmaAllocator                                       allocator{};
+   VkSurfaceKHR                                       surface{};
+   VkSurfaceCapabilitiesKHR                           surfaceCaps{};
+   VkSwapchainKHR                                     swapchain{};
+   std::vector<VkImage>                               swapchainImages{};
+   std::vector<VkImageView>                           swapchainViews{};
+   VkImage                                            depthImage{};
+   VmaAllocation                                      depthImageAllocation{};
+   VkImageView                                        depthImageView{};
+   VkBuffer                                           vBuffer{};
+   VmaAllocation                                      vBufferAllocation{};
+   std::array<ShaderDataBuffer, MAX_FRAMES_IN_FLIGHT> shaderDataBuffers;
+   std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT>  commandBuffers;
 };
 
 constexpr void Chk(VkResult result)
@@ -179,18 +203,154 @@ VkContext Init(SDL_Window *window)
          break;
       }
    }
+   VkImageCreateInfo depthImageCI = {
+      .sType     = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .imageType = VK_IMAGE_TYPE_2D,
+      .format    = depthFormat,
+      .extent{
+         .width  = static_cast<uint32_t>(WIDTH),
+         .height = static_cast<uint32_t>(HEIGHT),
+         .depth  = 1},
+      .mipLevels     = 1,
+      .arrayLayers   = 1,
+      .samples       = VK_SAMPLE_COUNT_1_BIT,
+      .tiling        = VK_IMAGE_TILING_OPTIMAL,
+      .usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+   };
+
+   VmaAllocationCreateInfo allocCI = {
+      .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+      .usage = VMA_MEMORY_USAGE_AUTO,
+   };
+   VkImage       depthImage{};
+   VmaAllocation depthImageAllocation{};
+   Chk(vmaCreateImage(
+      allocator,
+      &depthImageCI,
+      &allocCI,
+      &depthImage,
+      &depthImageAllocation,
+      nullptr));
+
+   VkImageViewCreateInfo depthViewCI = {
+      .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image    = depthImage,
+      .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format   = depthFormat,
+      .subresourceRange{.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .levelCount = 1, .layerCount = 1},
+   };
+
+   VkImageView depthImageView{};
+
+   Chk(vkCreateImageView(device, &depthViewCI, nullptr, &depthImageView));
+
+   tinyobj::attrib_t                attrib;
+   std::vector<tinyobj::shape_t>    shapes;
+   std::vector<tinyobj::material_t> materials;
+   tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, "assets/suzanne.obj");
+
+   struct Vertex
+   {
+      glm::vec3 pos;
+      glm::vec3 normal;
+      glm::vec2 uv;
+   };
+
+   const VkDeviceSize    indexCount{shapes[0].mesh.indices.size()};
+   std::vector<Vertex>   vertices{};
+   std::vector<uint16_t> indices{};
+   // Load vertex and index data
+   for (auto &index : shapes[0].mesh.indices)
+   {
+      Vertex v{
+         .pos =
+            {attrib.vertices[index.vertex_index * 3],
+             -attrib.vertices[index.vertex_index * 3 + 1],
+             attrib.vertices[index.vertex_index * 3 + 2]},
+         .normal =
+            {attrib.normals[index.normal_index * 3],
+             -attrib.normals[index.normal_index * 3 + 1],
+             attrib.normals[index.normal_index * 3 + 2]},
+         .uv = {
+            attrib.texcoords[index.texcoord_index * 2],
+            1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]}};
+      vertices.push_back(v);
+      indices.push_back(indices.size());
+   }
+
+   VkDeviceSize       vBufSize{sizeof(Vertex) * vertices.size()};
+   VkDeviceSize       iBufSize{sizeof(uint16_t) * indices.size()};
+   VkBufferCreateInfo bufferCI = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size  = vBufSize + iBufSize,
+      .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+   };
+
+   VmaAllocationCreateInfo vBufferAllocCI{
+      .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+               | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT
+               | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+      .usage = VMA_MEMORY_USAGE_AUTO};
+   VmaAllocationInfo vBufferAllocInfo{};
+
+   VkBuffer      vBuffer{};
+   VmaAllocation vBufferAllocation{};
+
+   Chk(vmaCreateBuffer(
+      allocator,
+      &bufferCI,
+      &vBufferAllocCI,
+      &vBuffer,
+      &vBufferAllocation,
+      &vBufferAllocInfo));
+
+   memcpy(vBufferAllocInfo.pMappedData, vertices.data(), vBufSize);
+   memcpy(static_cast<char *>(vBufferAllocInfo.pMappedData) + vBufSize, indices.data(), iBufSize);
+
+   std::array<ShaderDataBuffer, MAX_FRAMES_IN_FLIGHT> shaderDataBuffers;
+
+   for (auto i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+   {
+      VkBufferCreateInfo uBufferCI{
+         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+         .size  = sizeof(ShaderData),
+         .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT};
+      VmaAllocationCreateInfo uBufferAllocCI{
+         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                  | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT
+                  | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+         .usage = VMA_MEMORY_USAGE_AUTO};
+      Chk(vmaCreateBuffer(
+         allocator,
+         &uBufferCI,
+         &uBufferAllocCI,
+         &shaderDataBuffers[i].buffer,
+         &shaderDataBuffers[i].allocation,
+         &shaderDataBuffers[i].allocationInfo));
+      VkBufferDeviceAddressInfo uBufferBdaInfo{
+         .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+         .buffer = shaderDataBuffers[i].buffer};
+      shaderDataBuffers[i].deviceAddress = vkGetBufferDeviceAddress(device, &uBufferBdaInfo);
+   }
 
    return {
-      .device              = device,
-      .chosenGPU           = physicalDevice,
-      .graphicsQueue       = graphicsQueue,
-      .graphicsQueueFamily = graphicsQueueFamily,
-      .allocator           = allocator,
-      .surface             = surface,
-      .surfaceCaps         = surfaceCaps,
-      .swapchain           = swapchain,
-      .swapchainImages     = std::move(swapchainImages),
-      .swapchainViews      = std::move(swapchainViews),
+      .device               = device,
+      .chosenGPU            = physicalDevice,
+      .graphicsQueue        = graphicsQueue,
+      .graphicsQueueFamily  = graphicsQueueFamily,
+      .allocator            = allocator,
+      .surface              = surface,
+      .surfaceCaps          = surfaceCaps,
+      .swapchain            = swapchain,
+      .swapchainImages      = std::move(swapchainImages),
+      .swapchainViews       = std::move(swapchainViews),
+      .depthImage           = depthImage,
+      .depthImageAllocation = depthImageAllocation,
+      .depthImageView       = depthImageView,
+      .vBuffer              = vBuffer,
+      .vBufferAllocation    = vBufferAllocation,
+      .shaderDataBuffers    = shaderDataBuffers,
    };
 }
 
