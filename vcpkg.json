@@ -23,6 +23,7 @@
     "plf-colony",
     "vulkan",
     "vk-bootstrap",
-    "vulkan-memory-allocator"
+    "vulkan-memory-allocator",
+    "shader-slang"
   ]
 }

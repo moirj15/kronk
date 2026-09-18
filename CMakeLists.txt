@@ -13,6 +13,8 @@ find_package(Catch2 CONFIG REQUIRED)
 find_package(Vulkan) # CMake 3.21+
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
+find_package(slang CONFIG REQUIRED)
+
 
 add_executable(rts
         src/main.cpp
@@ -47,6 +49,10 @@ target_link_libraries(rts PRIVATE
         GPUOpen::VulkanMemoryAllocator
         vk-bootstrap::vk-bootstrap
         vk-bootstrap::vk-bootstrap-compiler-warnings
+        #        slang::gfx
+        slang::slang
+        #        slang::slang-llvm
+        #        slang::slang-glslang
 
 
         gdi32.lib
