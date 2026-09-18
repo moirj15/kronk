@@ -87,6 +87,7 @@ constexpr void Chk(VkResult result)
 
 VkContext Init(SDL_Window *window)
 {
+   u32 w = WIDTH, h = HEIGHT;
    u32 sdlExtensionCount = 0;
 
    const char *const *extensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
@@ -174,8 +175,8 @@ VkContext Init(SDL_Window *window)
    if (surfaceCaps.currentExtent.width == 0xFFFFFFFF)
    {
       swapchainExtent = {
-         .width  = WIDTH,
-         .height = HEIGHT,
+         .width  = w,
+         .height = h,
       };
    }
 
@@ -239,10 +240,7 @@ VkContext Init(SDL_Window *window)
       .sType     = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
       .imageType = VK_IMAGE_TYPE_2D,
       .format    = depthFormat,
-      .extent{
-         .width  = static_cast<uint32_t>(WIDTH),
-         .height = static_cast<uint32_t>(HEIGHT),
-         .depth  = 1},
+      .extent{.width = static_cast<uint32_t>(w), .height = static_cast<uint32_t>(h), .depth = 1},
       .mipLevels     = 1,
       .arrayLayers   = 1,
       .samples       = VK_SAMPLE_COUNT_1_BIT,
@@ -569,6 +567,9 @@ VkContext Init(SDL_Window *window)
 
    while (!quit)
    {
+      Chk(vkWaitForFences(device, 1, &fences[frameIndex], true, UINT64_MAX));
+      Chk(vkResetFences(device, 1, &fences[frameIndex]));
+
       for (SDL_Event event; SDL_PollEvent(&event);)
       {
          // Exit loop if the application is about to close
@@ -577,9 +578,72 @@ VkContext Init(SDL_Window *window)
             quit = true;
             break;
          }
+         if (event.type == SDL_EVENT_WINDOW_RESIZED)
+         {
+            updateSwapchain = true;
+            Chk(vkDeviceWaitIdle(device));
+            Chk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps));
+            swapchainCI.oldSwapchain = swapchain;
+            SDL_GetWindowSize(window, (i32 *)&w, (i32 *)&h);
+            swapchainCI.imageExtent = {
+               .width  = static_cast<uint32_t>(w),
+               .height = static_cast<uint32_t>(h)};
+            Chk(vkCreateSwapchainKHR(device, &swapchainCI, nullptr, &swapchain));
+            for (auto i = 0; i < imageCount; i++)
+            {
+               vkDestroyImageView(device, swapchainViews[i], nullptr);
+            }
+            Chk(vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr));
+            swapchainImages.resize(imageCount);
+            Chk(vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data()));
+            swapchainViews.resize(imageCount);
+            for (auto i = 0; i < imageCount; i++)
+            {
+               VkImageViewCreateInfo viewCI{
+                  .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                  .image    = swapchainImages[i],
+                  .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                  .format   = imageFormat,
+                  .subresourceRange =
+                     {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1}};
+               Chk(vkCreateImageView(device, &viewCI, nullptr, &swapchainViews[i]));
+            }
+            for (auto &semaphore : renderCompleteSemaphores)
+            {
+               vkDestroySemaphore(device, semaphore, nullptr);
+            }
+            renderCompleteSemaphores.resize(imageCount);
+            for (auto &semaphore : renderCompleteSemaphores)
+            {
+               Chk(vkCreateSemaphore(device, &semaphoreCI, nullptr, &semaphore));
+            }
+            vkDestroySwapchainKHR(device, swapchainCI.oldSwapchain, nullptr);
+            vmaDestroyImage(allocator, depthImage, depthImageAllocation);
+            vkDestroyImageView(device, depthImageView, nullptr);
+            depthImageCI.extent = {
+               .width  = static_cast<uint32_t>(w),
+               .height = static_cast<uint32_t>(h),
+               .depth  = 1};
+            VmaAllocationCreateInfo allocCI_{
+               .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+               .usage = VMA_MEMORY_USAGE_AUTO};
+            Chk(vmaCreateImage(
+               allocator,
+               &depthImageCI,
+               &allocCI_,
+               &depthImage,
+               &depthImageAllocation,
+               nullptr));
+            VkImageViewCreateInfo viewCI{
+               .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+               .image    = depthImage,
+               .viewType = VK_IMAGE_VIEW_TYPE_2D,
+               .format   = depthFormat,
+               .subresourceRange =
+                  {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .levelCount = 1, .layerCount = 1}};
+            Chk(vkCreateImageView(device, &viewCI, nullptr, &depthImageView));
+         }
       }
-      Chk(vkWaitForFences(device, 1, &fences[frameIndex], true, UINT64_MAX));
-      Chk(vkResetFences(device, 1, &fences[frameIndex]));
 
       ChkSwapchain(vkAcquireNextImageKHR(
          device,
@@ -592,7 +656,7 @@ VkContext Init(SDL_Window *window)
       ShaderData shaderData;
 
       shaderData.projection =
-         glm::perspective(glm::radians(45.0f), (float)WIDTH / (float)HEIGHT, 0.1f, 32.0f);
+         glm::perspective(glm::radians(45.0f), (float)w / (float)h, 0.1f, 32.0f);
 
       shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
       for (auto i = 0; i < 3; i++)
@@ -666,9 +730,8 @@ VkContext Init(SDL_Window *window)
 
       VkRenderingInfo renderingInfo{
          .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-         .renderArea{.extent{
-            .width  = static_cast<uint32_t>(WIDTH),
-            .height = static_cast<uint32_t>(HEIGHT)}},
+         .renderArea{
+            .extent{.width = static_cast<uint32_t>(w), .height = static_cast<uint32_t>(h)}},
          .layerCount           = 1,
          .colorAttachmentCount = 1,
          .pColorAttachments    = &colorAttachmentInfo,
@@ -676,15 +739,15 @@ VkContext Init(SDL_Window *window)
       vkCmdBeginRendering(cb, &renderingInfo);
 
       VkViewport vp{
-         .width    = static_cast<float>(WIDTH),
-         .height   = static_cast<float>(HEIGHT),
+         .width    = static_cast<float>(w),
+         .height   = static_cast<float>(h),
          .minDepth = 0.0f,
          .maxDepth = 1.0f};
       vkCmdSetViewport(cb, 0, 1, &vp);
       VkRect2D scissor{
          .extent{
-            .width  = static_cast<uint32_t>(WIDTH),
-            .height = static_cast<uint32_t>(HEIGHT),
+            .width  = static_cast<uint32_t>(w),
+            .height = static_cast<uint32_t>(h),
          },
       };
       vkCmdSetScissor(cb, 0, 1, &scissor);
@@ -797,7 +860,8 @@ int main(int argc, char **argv)
       std::println("err: {}", SDL_GetError());
       assert(0);
    }
-   SDL_Window *window = SDL_CreateWindow("SDL3 GL", 800, 600, SDL_WINDOW_VULKAN);
+   SDL_Window *window =
+      SDL_CreateWindow("SDL3 GL", 800, 600, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
    // if (!SDL_Vulkan_LoadLibrary(nullptr))
    // {
    //   std::println("err: {}", SDL_GetError());
