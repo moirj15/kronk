@@ -12,6 +12,10 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 #define TINYOBJLOADER_IMPLEMENTATION
+
+#include "Render/MemorySystem.hpp"
+#include "Render/Utils.hpp"
+
 #include <glm/gtc/quaternion.hpp>
 #include <tiny_obj_loader.h>
 
@@ -33,8 +37,9 @@ static void ChkSwapchain(VkResult result)
    }
 }
 
-namespace kronk
+namespace kronk::vk
 {
+
 struct ShaderData
 {
    glm::mat4 projection;
@@ -44,13 +49,75 @@ struct ShaderData
    uint32_t  selected{1};
 };
 
-struct ShaderDataBuffer
-{
-   VkBuffer          buffer{};
-   VmaAllocation     allocation{};
-   VmaAllocationInfo allocationInfo{};
-   VkDeviceAddress   deviceAddress{};
-};
+// struct ShaderDataBuffer
+// {
+//    VkBuffer          buffer{};
+//    VmaAllocation     allocation{};
+//    VmaAllocationInfo allocationInfo{};
+//    VkDeviceAddress   deviceAddress{};
+// };
+
+// using BufferHandle = plf::hive<ShaderDataBuffer>::const_iterator;
+//
+// class BufferSystem final
+// {
+//    plf::hive<ShaderDataBuffer> mBuffers;
+//    VmaAllocator                mAllocator;
+//    VkDevice                    mDevice;
+//
+// public:
+//    explicit BufferSystem(VmaAllocator allocator, VkDevice device) :
+//          mAllocator{allocator},
+//          mDevice{device}
+//    {
+//    }
+//    BufferHandle CreateBuffer(size_t size)
+//    {
+//       ShaderDataBuffer buffer{};
+//
+//       VkBufferCreateInfo uBufferCI{
+//          .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+//          .size  = size,
+//          .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+//       };
+//       VmaAllocationCreateInfo uBufferAllocCI{
+//          .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+//                   | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT
+//                   | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+//          .usage = VMA_MEMORY_USAGE_AUTO,
+//       };
+//       Chk(vmaCreateBuffer(
+//          mAllocator,
+//          &uBufferCI,
+//          &uBufferAllocCI,
+//          &buffer.buffer,
+//          &buffer.allocation,
+//          &buffer.allocationInfo));
+//       VkBufferDeviceAddressInfo uBufferBdaInfo{
+//          .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+//          .buffer = buffer.buffer,
+//       };
+//       buffer.deviceAddress = vkGetBufferDeviceAddress(mDevice, &uBufferBdaInfo);
+//
+//       return mBuffers.insert(buffer);
+//    }
+//
+//    void DestroyBuffer(BufferHandle handle)
+//    {
+//       vmaDestroyBuffer(mAllocator, handle->buffer, handle->allocation);
+//       mBuffers.erase(handle);
+//    }
+//
+//    size_t TotalAllocated() const
+//    {
+//       size_t total = 0;
+//       for (const auto &b : mBuffers)
+//       {
+//          total += b.allocationInfo.size;
+//       }
+//       return total;
+//    }
+// };
 
 struct VkContext
 {
@@ -76,20 +143,12 @@ struct VkContext
    std::vector<VkSemaphore>                           renderCompleteSemaphores;
 };
 
-constexpr void Chk(VkResult result)
-{
-   if (result != VK_SUCCESS)
-   {
-      std::println("Vulkan call returned an error {}", static_cast<u32>(result));
-      std::exit(result);
-   }
-}
-
-VkContext Init(SDL_Window *window)
+void Init(SDL_Window *window)
 {
    u32 w = WIDTH, h = HEIGHT;
    u32 sdlExtensionCount = 0;
 
+   // TODO: pull out vulkan specific init
    const char *const *extensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
 
    vkb::InstanceBuilder builder;
@@ -167,6 +226,8 @@ VkContext Init(SDL_Window *window)
 
    VmaAllocator allocator{};
    Chk(vmaCreateAllocator(&allocatorCI, &allocator));
+
+   BufferSystem bufferSystem{allocator, device};
 
    VkSurfaceCapabilitiesKHR surfaceCaps{};
    Chk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps));
@@ -292,6 +353,7 @@ VkContext Init(SDL_Window *window)
       glm::vec2 uv;
    };
 
+   // TODO: vertex pulling
    const VkDeviceSize    indexCount{shapes[0].mesh.indices.size()};
    std::vector<Vertex>   vertices{};
    std::vector<uint16_t> indices{};
@@ -343,32 +405,14 @@ VkContext Init(SDL_Window *window)
    memcpy(vBufferAllocInfo.pMappedData, vertices.data(), vBufSize);
    memcpy(static_cast<char *>(vBufferAllocInfo.pMappedData) + vBufSize, indices.data(), iBufSize);
 
-   std::array<ShaderDataBuffer, MAX_FRAMES_IN_FLIGHT> shaderDataBuffers;
+   std::array<BufferHandle, MAX_FRAMES_IN_FLIGHT> shaderDataBuffers;
 
    for (auto i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
    {
-      VkBufferCreateInfo uBufferCI{
-         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-         .size  = sizeof(ShaderData),
-         .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT};
-      VmaAllocationCreateInfo uBufferAllocCI{
-         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                  | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT
-                  | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-         .usage = VMA_MEMORY_USAGE_AUTO};
-      Chk(vmaCreateBuffer(
-         allocator,
-         &uBufferCI,
-         &uBufferAllocCI,
-         &shaderDataBuffers[i].buffer,
-         &shaderDataBuffers[i].allocation,
-         &shaderDataBuffers[i].allocationInfo));
-      VkBufferDeviceAddressInfo uBufferBdaInfo{
-         .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-         .buffer = shaderDataBuffers[i].buffer};
-      shaderDataBuffers[i].deviceAddress = vkGetBufferDeviceAddress(device, &uBufferBdaInfo);
+      shaderDataBuffers[i] = bufferSystem.AllocBuffer(sizeof(ShaderData));
    }
 
+   // TODO: Fence and semaphore utils
    VkSemaphoreCreateInfo semaphoreCI{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
    VkFenceCreateInfo     fenceCI{
           .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
@@ -402,6 +446,7 @@ VkContext Init(SDL_Window *window)
    std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT> commandBuffers{};
    Chk(vkAllocateCommandBuffers(device, &cbAllocCI, commandBuffers.data()));
 
+   // TODO: shader management
    Slang::ComPtr<slang::IGlobalSession> slangGlobalSession{};
    slang::createGlobalSession(slangGlobalSession.writeRef());
 
@@ -432,38 +477,44 @@ VkContext Init(SDL_Window *window)
       .targetCount{SlangInt(slangTargets.size())},
       .defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR,
       .compilerOptionEntries{slangOptions.data()},
-      .compilerOptionEntryCount{uint32_t(slangOptions.size())}};
+      .compilerOptionEntryCount{uint32_t(slangOptions.size())},
+   };
    Slang::ComPtr<slang::ISession> slangSession;
    slangGlobalSession->createSession(slangSessionDesc, slangSession.writeRef());
 
    Slang::ComPtr<slang::IModule> slangModule{
-      slangSession->loadModuleFromSource("triangle", "assets/shader.slang", nullptr, nullptr)};
+      slangSession->loadModuleFromSource("triangle", "assets/shader.slang", nullptr, nullptr),
+   };
    Slang::ComPtr<ISlangBlob> spirv;
    slangModule->getTargetCode(0, spirv.writeRef());
 
    VkShaderModuleCreateInfo shaderModuleCI{
       .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
       .codeSize = spirv->getBufferSize(),
-      .pCode    = (uint32_t *)spirv->getBufferPointer()};
+      .pCode    = (uint32_t *)spirv->getBufferPointer(),
+   };
    VkShaderModule shaderModule{};
    Chk(vkCreateShaderModule(device, &shaderModuleCI, nullptr, &shaderModule));
 
    VkPushConstantRange pushConstantRange{
       .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-      .size       = sizeof(VkDeviceAddress)};
+      .size       = sizeof(VkDeviceAddress),
+   };
    VkPipelineLayoutCreateInfo pipelineLayoutCI{
       .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
       .setLayoutCount         = 0,
       .pSetLayouts            = nullptr,
       .pushConstantRangeCount = 1,
-      .pPushConstantRanges    = &pushConstantRange};
+      .pPushConstantRanges    = &pushConstantRange,
+   };
    VkPipelineLayout pipelineLayout{};
    Chk(vkCreatePipelineLayout(device, &pipelineLayoutCI, nullptr, &pipelineLayout));
 
    VkVertexInputBindingDescription vertexBinding{
       .binding   = 0,
       .stride    = sizeof(Vertex),
-      .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+      .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+   };
 
    std::vector<VkVertexInputAttributeDescription> vertexAttributes{
       {
@@ -495,51 +546,64 @@ VkContext Init(SDL_Window *window)
 
    VkPipelineInputAssemblyStateCreateInfo inputAssemblyState{
       .sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+   };
 
    std::vector<VkPipelineShaderStageCreateInfo> shaderStages{
-      {.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-       .stage  = VK_SHADER_STAGE_VERTEX_BIT,
-       .module = shaderModule,
-       .pName  = "main"},
-      {.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-       .stage  = VK_SHADER_STAGE_FRAGMENT_BIT,
-       .module = shaderModule,
-       .pName  = "main"}};
+      {
+         .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .stage  = VK_SHADER_STAGE_VERTEX_BIT,
+         .module = shaderModule,
+         .pName  = "main",
+      },
+      {
+         .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .stage  = VK_SHADER_STAGE_FRAGMENT_BIT,
+         .module = shaderModule,
+         .pName  = "main",
+      },
+   };
 
    VkPipelineViewportStateCreateInfo viewportState{
       .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
       .viewportCount = 1,
-      .scissorCount  = 1};
+      .scissorCount  = 1,
+   };
    std::vector<VkDynamicState> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
    VkPipelineDynamicStateCreateInfo dynamicState{
       .sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
       .dynamicStateCount = 2,
-      .pDynamicStates    = dynamicStates.data()};
+      .pDynamicStates    = dynamicStates.data(),
+   };
 
    VkPipelineDepthStencilStateCreateInfo depthStencilState{
       .sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
       .depthTestEnable  = VK_TRUE,
       .depthWriteEnable = VK_TRUE,
-      .depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL};
+      .depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL,
+   };
 
    VkPipelineRenderingCreateInfo renderingCI{
       .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
       .colorAttachmentCount    = 1,
       .pColorAttachmentFormats = &imageFormat,
-      .depthAttachmentFormat   = depthFormat};
+      .depthAttachmentFormat   = depthFormat,
+   };
 
    VkPipelineColorBlendAttachmentState blendAttachment{.colorWriteMask = 0xF};
    VkPipelineColorBlendStateCreateInfo colorBlendState{
       .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
       .attachmentCount = 1,
-      .pAttachments    = &blendAttachment};
+      .pAttachments    = &blendAttachment,
+   };
    VkPipelineRasterizationStateCreateInfo rasterizationState{
       .sType     = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-      .lineWidth = 1.0f};
+      .lineWidth = 1.0f,
+   };
    VkPipelineMultisampleStateCreateInfo multisampleState{
       .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+   };
 
    VkGraphicsPipelineCreateInfo pipelineCI{
       .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -554,8 +618,10 @@ VkContext Init(SDL_Window *window)
       .pDepthStencilState  = &depthStencilState,
       .pColorBlendState    = &colorBlendState,
       .pDynamicState       = &dynamicState,
-      .layout              = pipelineLayout};
+      .layout              = pipelineLayout,
+   };
    VkPipeline pipeline{};
+   // TODO: PSO management
    Chk(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineCI, nullptr, &pipeline));
 
    u64       lastTime   = SDL_GetTicks();
@@ -666,7 +732,7 @@ VkContext Init(SDL_Window *window)
                                * glm::mat4_cast(glm::quat(objectRotations[i]));
       }
       memcpy(
-         shaderDataBuffers[frameIndex].allocationInfo.pMappedData,
+         shaderDataBuffers[frameIndex]->allocationInfo.pMappedData,
          &shaderData,
          sizeof(ShaderData));
 
@@ -765,7 +831,7 @@ VkContext Init(SDL_Window *window)
          VK_SHADER_STAGE_VERTEX_BIT,
          0,
          sizeof(VkDeviceAddress),
-         &shaderDataBuffers[frameIndex].deviceAddress);
+         &shaderDataBuffers[frameIndex]->deviceAddress);
 
       vkCmdDrawIndexed(cb, indexCount, 3, 0, 0, 0);
       vkCmdEndRendering(cb);
@@ -826,32 +892,9 @@ VkContext Init(SDL_Window *window)
          .pImageIndices      = &imageIndex};
       ChkSwapchain(vkQueuePresentKHR(graphicsQueue, &presentInfo));
    }
-
-   return {
-      .device                   = device,
-      .chosenGPU                = physicalDevice,
-      .graphicsQueue            = graphicsQueue,
-      .graphicsQueueFamily      = graphicsQueueFamily,
-      .allocator                = allocator,
-      .surface                  = surface,
-      .surfaceCaps              = surfaceCaps,
-      .swapchain                = swapchain,
-      .swapchainImages          = std::move(swapchainImages),
-      .swapchainViews           = std::move(swapchainViews),
-      .depthImage               = depthImage,
-      .depthImageAllocation     = depthImageAllocation,
-      .depthImageView           = depthImageView,
-      .vBuffer                  = vBuffer,
-      .vBufferAllocation        = vBufferAllocation,
-      .shaderDataBuffers        = shaderDataBuffers,
-      .commandBuffers           = commandBuffers,
-      .fences                   = fences,
-      .imageAquiredSemaphores   = imageAcquiredSemaphores,
-      .renderCompleteSemaphores = renderCompleteSemaphores,
-   };
 }
 
-} // namespace kronk
+} // namespace kronk::vk
 
 int main(int argc, char **argv)
 {
@@ -868,7 +911,7 @@ int main(int argc, char **argv)
    //   assert(0);
    // }
 
-   const auto vkCtx = kronk::Init(window);
+   kronk::vk::Init(window);
 
    bool      running = true;
    SDL_Event e;

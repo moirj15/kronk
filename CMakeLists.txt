@@ -26,6 +26,9 @@ add_executable(rts
         src/GfxMain.hpp
         src/ModuleIO.hpp
         src/CppHelpers.hpp
+        src/Render/MemorySystem.hpp
+        src/Render/MemorySystem.cpp
+        src/Render/Utils.hpp
 )
 
 include(cmake/CompilerWarnings.cmake)
