@@ -29,6 +29,8 @@ add_executable(rts
         src/Render/MemorySystem.hpp
         src/Render/MemorySystem.cpp
         src/Render/Utils.hpp
+        src/Render/WindowSystem.cpp
+        src/Render/WindowSystem.hpp
 )
 
 include(cmake/CompilerWarnings.cmake)

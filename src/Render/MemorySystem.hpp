@@ -18,27 +18,26 @@ struct ShaderDataBuffer
 
 using BufferHandle = plf::hive<ShaderDataBuffer>::const_iterator;
 
-class BufferSystem final
+class MemorySystem final
 {
-   plf::hive<ShaderDataBuffer> mBuffers{};
-   std::vector<BufferHandle>   mIters;
-   VmaAllocator                mAllocator{};
-   VkDevice                    mDevice{};
+   plf::hive<ShaderDataBuffer> buffers{};
+   VmaAllocator                allocator{};
+   VkDevice                    device{};
 
 public:
-   explicit BufferSystem(const VmaAllocator allocator, const VkDevice device) :
-         mAllocator{allocator},
-         mDevice{device}
+   explicit MemorySystem(const VmaAllocator allocator, const VkDevice device) :
+         allocator{allocator},
+         device{device}
    {
    }
 
-   void ShutDown();
+   void ShutDown(this MemorySystem &self);
 
-   BufferHandle AllocBuffer(size_t size);
+   BufferHandle AllocBuffer(this MemorySystem &self, size_t size);
 
-   void FreeBuffer(const BufferHandle &handle);
+   void FreeBuffer(this MemorySystem &self, const BufferHandle &handle);
 
-   size_t TotalAllocated() const;
+   size_t TotalAllocated(this const MemorySystem &self);
 };
 
 } // namespace kronk::vk

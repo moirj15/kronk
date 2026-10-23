@@ -5,16 +5,15 @@
 namespace kronk::vk
 {
 
-void BufferSystem::ShutDown()
+void MemorySystem::ShutDown(this MemorySystem &self)
 {
-   for (auto &b : mBuffers)
+   for (auto &b : self.buffers)
    {
-      vmaFreeMemory(mAllocator, b.allocation);
+      vmaFreeMemory(self.allocator, b.allocation);
    }
-   mBuffers = {};
-   mIters.clear();
+   self.buffers = {};
 }
-BufferHandle BufferSystem::AllocBuffer(const size_t size)
+BufferHandle MemorySystem::AllocBuffer(this MemorySystem &self, const size_t size)
 {
    ShaderDataBuffer buffer{};
 
@@ -30,7 +29,7 @@ BufferHandle BufferSystem::AllocBuffer(const size_t size)
       .usage = VMA_MEMORY_USAGE_AUTO,
    };
    Chk(vmaCreateBuffer(
-      mAllocator,
+      self.allocator,
       &uBufferCI,
       &uBufferAllocCI,
       &buffer.buffer,
@@ -40,19 +39,20 @@ BufferHandle BufferSystem::AllocBuffer(const size_t size)
       .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
       .buffer = buffer.buffer,
    };
-   buffer.deviceAddress = vkGetBufferDeviceAddress(mDevice, &uBufferBdaInfo);
+   buffer.deviceAddress = vkGetBufferDeviceAddress(self.device, &uBufferBdaInfo);
 
-   return mBuffers.insert(buffer);
+   return self.buffers.insert(buffer);
 }
-void BufferSystem::FreeBuffer(const BufferHandle &handle)
+void MemorySystem::FreeBuffer(this MemorySystem &self, const BufferHandle &handle)
 {
-   vmaDestroyBuffer(mAllocator, handle->buffer, handle->allocation);
-   mBuffers.erase(handle);
+   vmaDestroyBuffer(self.allocator, handle->buffer, handle->allocation);
+   self.buffers.erase(handle);
 }
-size_t BufferSystem::TotalAllocated() const
+
+size_t MemorySystem::TotalAllocated(this const MemorySystem &self)
 {
    size_t total = 0;
-   for (const auto &b : mBuffers)
+   for (const auto &b : self.buffers)
    {
       total += b.allocationInfo.size;
    }
