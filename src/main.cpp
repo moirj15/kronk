@@ -20,6 +20,13 @@
 #include <glm/gtc/quaternion.hpp>
 #include <tiny_obj_loader.h>
 
+#define DeleteMoveAndCopy(ClassName)                                                               \
+   ClassName(const ClassName &)            = delete;                                               \
+   ClassName &operator=(const ClassName &) = delete;                                               \
+                                                                                                   \
+   ClassName(ClassName &&)            = delete;                                                    \
+   ClassName &operator=(ClassName &&) = delete;
+
 constexpr u32 WIDTH                = 800;
 constexpr u32 HEIGHT               = 600;
 constexpr u32 MAX_FRAMES_IN_FLIGHT = 2;
@@ -94,13 +101,49 @@ class SwapchainSystem final
    u32                      width{};
    u32                      height{};
    VkFormat                 format{VK_FORMAT_B8G8R8A8_SRGB};
-   size_t                   currentImage{};
+   u32                      currentImage{};
 
 public:
-   VkImageView GetCurrentImageView(this const SwapchainSystem &self);
-   void        Recreate(this SwapchainSystem &self, u32 newWidth, u32 newHeight, u32 minImageCount)
+   explicit SwapchainSystem(u32 width, u32 height, u32 minImageCount)
    {
-      self.DestroyOldSwapchain();
+      Recreate(width, height, minImageCount);
+   }
+
+   DeleteMoveAndCopy(SwapchainSystem);
+   VkImageView GetCurrentImageView(this const SwapchainSystem &self)
+   {
+      assert(self.currentImage < self.swapchainViews.size());
+      return self.swapchainViews[self.currentImage];
+   }
+
+   VkImage GetCurrentImage(this const SwapchainSystem &self)
+   {
+      assert(self.currentImage < self.swapchainImages.size());
+      return self.swapchainImages[self.currentImage];
+   }
+
+   void LoadNextImage(this SwapchainSystem &self, VkSemaphore frameSemaphore)
+   {
+      ChkSwapchain(vkAcquireNextImageKHR(
+         self.device,
+         self.swapchain,
+         UINT64_MAX,
+         frameSemaphore,
+         VK_NULL_HANDLE,
+         &self.currentImage));
+   }
+
+   u32 GetSwapchainCount(this const SwapchainSystem &self)
+   {
+      return self.swapchainImages.size();
+   }
+   const VkFormat *GetSwapchainFormatPtr(this const SwapchainSystem &self)
+   {
+      return &self.format;
+   }
+
+   void Recreate(this SwapchainSystem &self, u32 newWidth, u32 newHeight, u32 minImageCount)
+   {
       self.width  = newWidth;
       self.height = newHeight;
       VkSwapchainCreateInfoKHR swapchainCI{
@@ -119,19 +162,26 @@ public:
          .preTransform     = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
          .compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
          // effectively "v-sync" mode, available everywhere
-         .presentMode = VK_PRESENT_MODE_FIFO_KHR,
+         .presentMode  = VK_PRESENT_MODE_FIFO_KHR,
+         .oldSwapchain = self.swapchain,
       };
 
-      VkSwapchainKHR swapchain{};
+      VkSwapchainKHR newSwapchain{};
 
-      Chk(vkCreateSwapchainKHR(self.device, &swapchainCI, nullptr, &swapchain));
+      Chk(vkCreateSwapchainKHR(self.device, &swapchainCI, nullptr, &newSwapchain));
+
+      self.DestroyOldSwapchain();
+      self.swapchain = newSwapchain;
 
       u32 imageCount = 0;
-      Chk(vkGetSwapchainImagesKHR(self.device, swapchain, &imageCount, nullptr));
+      Chk(vkGetSwapchainImagesKHR(self.device, self.swapchain, &imageCount, nullptr));
       self.swapchainImages.resize(imageCount);
       self.swapchainViews.resize(imageCount);
-      Chk(
-         vkGetSwapchainImagesKHR(self.device, swapchain, &imageCount, self.swapchainImages.data()));
+      Chk(vkGetSwapchainImagesKHR(
+         self.device,
+         self.swapchain,
+         &imageCount,
+         self.swapchainImages.data()));
       for (u32 i = 0; i < imageCount; i++)
       {
          VkImageViewCreateInfo viewCI = {
@@ -150,6 +200,11 @@ public:
       }
    }
 
+   VkSwapchainKHR GetSwapchain(this const SwapchainSystem &self)
+   {
+      return self.swapchain;
+   }
+
 private:
    void DestroyOldSwapchain(this SwapchainSystem &self)
    {
@@ -158,13 +213,83 @@ private:
          vkDestroyImageView(self.device, view, nullptr);
          view = {};
       }
+      vkDestroySwapchainKHR(self.device, self.swapchain, nullptr);
    }
 };
 
+struct RenderTarget
+{
+   VkImage     colorImage{};
+   VkImageView colorView{};
+   VkImage     depthImage{};
+   VkImageView depthView{};
+};
 class FinalRenderTarget final
 {
+   VkDevice                 device{};
+   std::vector<VkSemaphore> renderCompleteSemaphores;
+   SwapchainSystem         *swapchainSystem{};
+
+   VkImage      depthTexture{};
+   VkImageView  depthView{};
+   VmaAllocator allocator{};
+
+   VmaAllocation depthImageAllocation{};
+
 public:
-   VkFormat *GetImageFormats();
+   explicit FinalRenderTarget(
+      VkDevice         device,
+      SwapchainSystem *swapchainSystem,
+      VmaAllocator     allocator,
+      u32              width,
+      u32              height) :
+         device{device},
+         swapchainSystem{swapchainSystem},
+         allocator{allocator}
+   {
+      RecreateTarget(width, height);
+   }
+
+   DeleteMoveAndCopy(FinalRenderTarget);
+
+   VkFormat   *GetImageFormats();
+   VkImage     GetNextTargetImage(this FinalRenderTarget &self);
+   VkImageView GetNextTargetImageView(this FinalRenderTarget &self);
+
+   void NewFrame(this FinalRenderTarget &self)
+   {
+   }
+
+   void RecreateTarget(this FinalRenderTarget &self, u32 newWidth, u32 newHeight)
+   {
+      for (auto &semaphore : self.renderCompleteSemaphores)
+      {
+         vkDestroySemaphore(self.device, semaphore, nullptr);
+      }
+      self.renderCompleteSemaphores.resize(self.swapchainSystem->GetSwapchainCount());
+      const VkSemaphoreCreateInfo semaphoreCI{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+      for (auto &semaphore : self.renderCompleteSemaphores)
+      {
+         Chk(vkCreateSemaphore(self.device, &semaphoreCI, nullptr, &semaphore));
+      }
+      vmaDestroyImage(self.allocator, self.depthTexture, self.depthImageAllocation);
+      vkDestroyImageView(self.device, self.depthView, nullptr);
+   }
+
+   RenderTarget GetTarget(this const FinalRenderTarget &self)
+   {
+      return {
+         .colorImage = self.swapchainSystem->GetCurrentImage(),
+         .colorView  = self.swapchainSystem->GetCurrentImageView(),
+         .depthImage = self.depthTexture,
+         .depthView  = self.depthView,
+      };
+   }
+
+   VkSwapchainKHR GetSwapchain(this const FinalRenderTarget &self)
+   {
+      return self.swapchainSystem->GetSwapchain();
+   }
 };
 
 VkContext InitVk(SDL_Window *window)
@@ -177,11 +302,11 @@ VkContext InitVk(SDL_Window *window)
 
    vkb::InstanceBuilder builder;
 
-   auto result = builder.set_app_name("Example vulkan_application")
-                    .request_validation_layers(true)
-                    .use_default_debug_messenger()
-                    .require_api_version(1, 3, 0)
-                    .build();
+   auto                     result         = builder.set_app_name("Example vulkan_application")
+                                                .request_validation_layers(true)
+                                                .use_default_debug_messenger()
+                                                .require_api_version(1, 3, 0)
+                                                .build();
    vkb::Instance            vkbInstance    = result.value();
    VkInstance               instance       = vkbInstance.instance;
    VkDebugUtilsMessengerEXT debugMessenger = vkbInstance.debug_messenger;
@@ -286,8 +411,18 @@ void Init(SDL_Window *window)
       };
    }
 
-   SwapchainSystem swapchainSystem;
-   swapchainSystem.Recreate(swapchainExtent.width, swapchainExtent.height, surfaceCaps.minImageCount);
+   SwapchainSystem swapchainSystem{
+      swapchainExtent.width,
+      swapchainExtent.height,
+      surfaceCaps.minImageCount,
+   };
+   FinalRenderTarget finalRenderTarget{
+      ctx.device,
+      &swapchainSystem,
+      allocator,
+      swapchainExtent.width,
+      swapchainExtent.height,
+   };
 
    /*
    const VkFormat           imageFormat = VK_FORMAT_B8G8R8A8_SRGB;
@@ -469,8 +604,8 @@ void Init(SDL_Window *window)
    // TODO: Fence and semaphore utils
    VkSemaphoreCreateInfo semaphoreCI{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
    VkFenceCreateInfo     fenceCI{
-          .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-          .flags = VK_FENCE_CREATE_SIGNALED_BIT};
+      .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+      .flags = VK_FENCE_CREATE_SIGNALED_BIT};
    std::array<VkFence, MAX_FRAMES_IN_FLIGHT>     fences{};
    std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> imageAcquiredSemaphores{};
    for (auto i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
@@ -479,7 +614,7 @@ void Init(SDL_Window *window)
       Chk(vkCreateSemaphore(ctx.device, &semaphoreCI, nullptr, &imageAcquiredSemaphores[i]));
    }
    std::vector<VkSemaphore> renderCompleteSemaphores;
-   renderCompleteSemaphores.resize(swapchainImages.size());
+   renderCompleteSemaphores.resize(swapchainSystem.GetSwapchainCount());
    for (auto &semaphore : renderCompleteSemaphores)
    {
       Chk(vkCreateSemaphore(ctx.device, &semaphoreCI, nullptr, &semaphore));
@@ -640,7 +775,7 @@ void Init(SDL_Window *window)
    VkPipelineRenderingCreateInfo renderingCI{
       .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
       .colorAttachmentCount    = 1,
-      .pColorAttachmentFormats = &imageFormat,
+      .pColorAttachmentFormats = swapchainSystem.GetSwapchainFormatPtr(),
       .depthAttachmentFormat   = depthFormat,
    };
 
@@ -706,9 +841,10 @@ void Init(SDL_Window *window)
                ctx.physicalDevice,
                ctx.surface,
                &surfaceCaps));
-            swapchainCI.oldSwapchain = swapchain;
             i32 w{}, h{};
             SDL_GetWindowSize(window, (i32 *)&w, (i32 *)&h);
+#if 0
+            swapchainCI.oldSwapchain = swapchain;
             windowSystem.UpdateDimensions(w, h);
             swapchainCI.imageExtent = {
                .width  = windowSystem.GetWidth(),
@@ -734,16 +870,16 @@ void Init(SDL_Window *window)
                      {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1}};
                Chk(vkCreateImageView(ctx.device, &viewCI, nullptr, &swapchainViews[i]));
             }
+#endif
             for (auto &semaphore : renderCompleteSemaphores)
             {
                vkDestroySemaphore(ctx.device, semaphore, nullptr);
             }
-            renderCompleteSemaphores.resize(imageCount);
+            renderCompleteSemaphores.resize(swapchainSystem.GetSwapchainCount());
             for (auto &semaphore : renderCompleteSemaphores)
             {
                Chk(vkCreateSemaphore(ctx.device, &semaphoreCI, nullptr, &semaphore));
             }
-            vkDestroySwapchainKHR(ctx.device, swapchainCI.oldSwapchain, nullptr);
             vmaDestroyImage(allocator, depthImage, depthImageAllocation);
             vkDestroyImageView(ctx.device, depthImageView, nullptr);
             depthImageCI.extent = {
@@ -771,15 +907,8 @@ void Init(SDL_Window *window)
          }
       }
 
-      ChkSwapchain(vkAcquireNextImageKHR(
-         ctx.device,
-         swapchain,
-         UINT64_MAX,
-         imageAcquiredSemaphores[frameIndex],
-         VK_NULL_HANDLE,
-         &imageIndex));
-
-      ShaderData shaderData;
+      const RenderTarget renderTarget = finalRenderTarget.GetTarget();
+      ShaderData         shaderData;
 
       shaderData.projection = glm::perspective(
          glm::radians(45.0f),
@@ -818,7 +947,7 @@ void Init(SDL_Window *window)
                VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .image     = swapchainImages[imageIndex],
+            .image     = swapchainSystem.GetCurrentImage(),
             .subresourceRange{
                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                .levelCount = 1,
@@ -844,7 +973,7 @@ void Init(SDL_Window *window)
 
       VkRenderingAttachmentInfo colorAttachmentInfo{
          .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-         .imageView   = swapchainViews[imageIndex],
+         .imageView   = swapchainSystem.GetCurrentImageView(),
          .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
          .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
          .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
@@ -911,7 +1040,7 @@ void Init(SDL_Window *window)
          .dstAccessMask = 0,
          .oldLayout     = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
          .newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-         .image         = swapchainImages[imageIndex],
+         .image         = swapchainSystem.GetCurrentImage(),
          .subresourceRange{
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .levelCount = 1,
@@ -949,6 +1078,8 @@ void Init(SDL_Window *window)
       Chk(vkQueueSubmit2(ctx.graphicsQueue, 1, &submitInfo, fences[frameIndex]));
 
       frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
+
+      VkSwapchainKHR swapchain = finalRenderTarget.GetSwapchain();
 
       VkPresentInfoKHR presentInfo{
          .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
